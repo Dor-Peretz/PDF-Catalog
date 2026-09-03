@@ -74,6 +74,14 @@ select {
   font-weight: 600;
 }
 
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 28px;
+}
+
 .titlebar-actions,
 .settings-row,
 .progress-actions,
