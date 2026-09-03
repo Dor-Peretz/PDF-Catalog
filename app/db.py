@@ -4,8 +4,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
+from app.paths import user_data_dir
+
+DATA_DIR = user_data_dir()
 DB_PATH = DATA_DIR / "catalog.db"
 
 SCHEMA = """
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS documents (
     is_scanned INTEGER DEFAULT 0,
     language TEXT,
     category TEXT,
+    subcategory TEXT,
     dates_json TEXT,
     full_text TEXT,
     error TEXT,
@@ -65,10 +67,18 @@ def init_db(conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
     if conn is None:
         conn = get_connection()
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     conn.commit()
     if own:
         return conn
     return conn
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "subcategory" not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN subcategory TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_subcategory ON documents(subcategory)")
 
 
 def find_by_path(conn: sqlite3.Connection, path: str) -> sqlite3.Row | None:
@@ -100,6 +110,7 @@ def upsert_document(
     is_scanned: bool,
     language: str,
     category: str,
+    subcategory: str = "",
     dates_json: str,
     full_text: str,
     keywords: list[tuple[str, float]],
@@ -114,8 +125,8 @@ def upsert_document(
         """
         INSERT INTO documents (
             path, filename, sha256, size, mtime, page_count, is_scanned,
-            language, category, dates_json, full_text, error, indexed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            language, category, subcategory, dates_json, full_text, error, indexed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             path,
@@ -127,6 +138,7 @@ def upsert_document(
             1 if is_scanned else 0,
             language,
             category,
+            subcategory or "",
             dates_json,
             full_text,
             error,
@@ -145,7 +157,7 @@ def upsert_document(
         INSERT INTO documents_fts (rowid, filename, full_text, keywords, category)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (document_id, filename, full_text or "", keyword_text, category or ""),
+        (document_id, filename, full_text or "", keyword_text, f"{category or ''} {subcategory or ''}".strip()),
     )
     conn.commit()
     return document_id
@@ -180,14 +192,21 @@ def _apply_filters(
     params: list[Any],
     *,
     categories: list[str] | None = None,
+    subcategories: list[tuple[str, str]] | None = None,
     language: str | None = None,
     ocr_states: list[str] | None = None,
     folder: str | None = None,
 ) -> None:
+    clauses: list[str] = []
     if categories:
         placeholders = ",".join("?" for _ in categories)
-        where.append(f"d.category IN ({placeholders})")
+        clauses.append(f"d.category IN ({placeholders})")
         params.extend(categories)
+    for parent, child in subcategories or []:
+        clauses.append("(d.category = ? AND IFNULL(d.subcategory, '') = ?)")
+        params.extend([parent, child])
+    if clauses:
+        where.append("(" + " OR ".join(clauses) + ")")
     if language:
         where.append("d.language = ?")
         params.append(language)
@@ -217,6 +236,7 @@ def search_documents(
     query: str = "",
     category: str | None = None,
     categories: list[str] | None = None,
+    subcategories: list[tuple[str, str]] | None = None,
     language: str | None = None,
     ocr_states: list[str] | None = None,
     folder: str | None = None,
@@ -227,6 +247,7 @@ def search_documents(
     if category:
         selected.append(category)
     selected = [item for item in selected if item]
+    sub_pairs = list(subcategories or [])
 
     where: list[str] = []
     params: list[Any] = []
@@ -254,6 +275,7 @@ def search_documents(
         where,
         params,
         categories=selected,
+        subcategories=sub_pairs,
         language=language,
         ocr_states=ocr_states,
         folder=folder,
@@ -276,6 +298,7 @@ def search_documents(
             where,
             params,
             categories=selected,
+            subcategories=sub_pairs,
             language=language,
             ocr_states=ocr_states,
             folder=folder,
@@ -325,13 +348,102 @@ def get_document(conn: sqlite3.Connection, document_id: int) -> dict[str, Any] |
 def category_counts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT COALESCE(category, 'אחר') AS category, COUNT(*) AS count
+        SELECT COALESCE(category, 'אחר') AS category,
+               IFNULL(subcategory, '') AS subcategory,
+               COUNT(*) AS count
         FROM documents
-        GROUP BY COALESCE(category, 'אחר')
-        ORDER BY count DESC, category
+        GROUP BY COALESCE(category, 'אחר'), IFNULL(subcategory, '')
+        ORDER BY category, subcategory
         """
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def update_document_classification(
+    conn: sqlite3.Connection,
+    document_id: int,
+    category: str,
+    subcategory: str = "",
+) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE documents SET category = ?, subcategory = ? WHERE id = ?",
+        (category, subcategory or "", document_id),
+    )
+    keyword_text = " ".join(
+        k["keyword"]
+        for k in conn.execute(
+            "SELECT keyword FROM keywords WHERE document_id = ? ORDER BY score DESC",
+            (document_id,),
+        ).fetchall()
+    )
+    conn.execute("DELETE FROM documents_fts WHERE rowid = ?", (document_id,))
+    conn.execute(
+        """
+        INSERT INTO documents_fts (rowid, filename, full_text, keywords, category)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            document_id,
+            row["filename"],
+            row["full_text"] or "",
+            keyword_text,
+            f"{category} {subcategory or ''}".strip(),
+        ),
+    )
+    conn.commit()
+    return get_document(conn, document_id)
+
+
+def rename_classification(
+    conn: sqlite3.Connection,
+    *,
+    old_category: str,
+    new_category: str,
+    old_subcategory: str | None = None,
+    new_subcategory: str | None = None,
+) -> None:
+    if old_subcategory is None:
+        conn.execute(
+            "UPDATE documents SET category = ? WHERE category = ?",
+            (new_category, old_category),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE documents
+            SET category = ?, subcategory = ?
+            WHERE category = ? AND IFNULL(subcategory, '') = ?
+            """,
+            (new_category, new_subcategory or "", old_category, old_subcategory),
+        )
+    conn.commit()
+
+
+def clear_category_documents(conn: sqlite3.Connection, category_name: str, fallback: str = "אחר") -> None:
+    conn.execute(
+        "UPDATE documents SET category = ?, subcategory = '' WHERE category = ?",
+        (fallback, category_name),
+    )
+    conn.commit()
+
+
+def clear_subcategory_documents(
+    conn: sqlite3.Connection,
+    category_name: str,
+    subcategory_name: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE documents
+        SET subcategory = ''
+        WHERE category = ? AND IFNULL(subcategory, '') = ?
+        """,
+        (category_name, subcategory_name),
+    )
+    conn.commit()
 
 
 def document_count(conn: sqlite3.Connection) -> int:

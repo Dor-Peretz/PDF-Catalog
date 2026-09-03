@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
-SETTINGS_PATH = ROOT / "data" / "settings.json"
+from app.paths import user_data_dir
+
+SETTINGS_PATH = user_data_dir() / "settings.json"
 
 DEFAULTS: dict[str, Any] = {
     "folder": "",

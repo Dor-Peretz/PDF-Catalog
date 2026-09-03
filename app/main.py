@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -22,10 +24,11 @@ from app.scanner import (
     resume_job,
     start_scan,
 )
+from app.paths import web_dir
 from app.settings import load_settings, save_settings
+from app import taxonomy as taxonomy_store
 
-ROOT = Path(__file__).resolve().parent.parent
-WEB_DIR = ROOT / "web"
+WEB_DIR = web_dir()
 
 app = FastAPI(title="PDF Catalog", docs_url=None, redoc_url=None)
 db.init_db().close()
@@ -36,6 +39,26 @@ class ScanRequest(BaseModel):
     recursive: bool | None = None
     force: bool = False
     rebuild: bool = False
+
+
+class CategoryCreate(BaseModel):
+    name: str
+    keywords: str = ""
+
+
+class CategoryUpdate(BaseModel):
+    name: str | None = None
+    keywords: str | None = None
+
+
+class SubcategoryCreate(BaseModel):
+    name: str
+    keywords: str = ""
+
+
+class DocumentClassify(BaseModel):
+    category: str
+    subcategory: str = ""
 
 
 class SettingsUpdate(BaseModel):
@@ -63,6 +86,16 @@ def _public_document(item: dict) -> dict:
     folder = str(Path(item["path"]).parent) if item.get("path") else ""
     item["folder"] = folder
     return item
+
+
+@app.post("/api/quit")
+def quit_app() -> dict:
+    def stop() -> None:
+        time.sleep(0.25)
+        os._exit(0)
+
+    threading.Thread(target=stop, daemon=True).start()
+    return {"ok": True}
 
 
 @app.get("/api/status")
@@ -171,6 +204,7 @@ def search(
     q: str = "",
     category: str = "",
     categories: str = "",
+    subcategories: str = "",
     language: str = "",
     ocr: str = "",
     folder: str = "",
@@ -178,6 +212,12 @@ def search(
     limit: int = 100,
 ) -> dict:
     selected = [part for part in categories.split(",") if part]
+    sub_pairs: list[tuple[str, str]] = []
+    for part in subcategories.split(",") if subcategories else []:
+        if ">>" in part:
+            parent, child = part.split(">>", 1)
+            if parent and child:
+                sub_pairs.append((parent, child))
     ocr_states = [part for part in ocr.split(",") if part]
     conn = db.get_connection()
     try:
@@ -186,6 +226,7 @@ def search(
             query=q,
             category=category or None,
             categories=selected,
+            subcategories=sub_pairs,
             language=language or None,
             ocr_states=ocr_states,
             folder=folder or None,
@@ -272,6 +313,97 @@ def reindex_document(document_id: int) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.patch("/api/documents/{document_id}")
+def classify_document(document_id: int, body: DocumentClassify) -> dict:
+    conn = db.get_connection()
+    try:
+        item = db.update_document_classification(
+            conn, document_id, body.category.strip(), body.subcategory.strip()
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return _public_document(item)
+    finally:
+        conn.close()
+
+
+@app.get("/api/taxonomy")
+def get_taxonomy() -> dict:
+    return {"categories": taxonomy_store.load_taxonomy()}
+
+
+@app.post("/api/taxonomy/categories")
+def create_category(body: CategoryCreate) -> dict:
+    try:
+        return taxonomy_store.add_category(body.name, body.keywords)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/taxonomy/categories/{category_id}")
+def edit_category(category_id: str, body: CategoryUpdate) -> dict:
+    existing = taxonomy_store.get_category(category_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    old_name = existing["name"]
+    try:
+        updated = taxonomy_store.update_category(
+            category_id,
+            **{key: value for key, value in body.model_dump().items() if value is not None},
+        )
+    except (KeyError, ValueError) as exc:
+        status = 404 if isinstance(exc, KeyError) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    if updated["name"] != old_name:
+        conn = db.get_connection()
+        try:
+            db.rename_classification(conn, old_category=old_name, new_category=updated["name"])
+        finally:
+            conn.close()
+    return updated
+
+
+@app.delete("/api/taxonomy/categories/{category_id}")
+def remove_category(category_id: str) -> dict:
+    try:
+        removed = taxonomy_store.delete_category(category_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Category not found") from None
+    conn = db.get_connection()
+    try:
+        db.clear_category_documents(conn, removed["name"])
+    finally:
+        conn.close()
+    return {"ok": True, "removed": removed}
+
+
+@app.post("/api/taxonomy/categories/{category_id}/subcategories")
+def create_subcategory(category_id: str, body: SubcategoryCreate) -> dict:
+    try:
+        return taxonomy_store.add_subcategory(category_id, body.name, body.keywords)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Category not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/taxonomy/categories/{category_id}/subcategories/{subcategory_id}")
+def remove_subcategory(category_id: str, subcategory_id: str) -> dict:
+    parent = taxonomy_store.get_category(category_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        removed = taxonomy_store.delete_subcategory(category_id, subcategory_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Not found") from None
+    conn = db.get_connection()
+    try:
+        db.clear_subcategory_documents(conn, parent["name"], removed["name"])
+    finally:
+        conn.close()
+    return {"ok": True, "removed": removed}
+
+
 @app.get("/api/categories")
 def categories() -> dict:
     conn = db.get_connection()
@@ -286,6 +418,7 @@ def filters() -> dict:
     conn = db.get_connection()
     try:
         return {
+            "taxonomy": taxonomy_store.load_taxonomy(),
             "categories": db.category_counts(conn),
             "languages": db.language_counts(conn),
             "ocr": db.ocr_counts(conn),

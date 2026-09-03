@@ -14,12 +14,37 @@
   --mark: #fff2b8;
   --tag-bg: #eef0f3;
   --tag-text: #515761;
+  --hover: #fafafa;
+  --overlay: rgba(32, 33, 36, 0.32);
   --radius: 5px;
   --titlebar: 54px;
   --searchbar: 72px;
+  --footer: 28px;
+  color-scheme: light;
   font-family: Inter, "Segoe UI", Arial, sans-serif;
   color: var(--text);
   font-size: 13px;
+}
+
+html[data-theme="dark"] {
+  --bg: #1c1d1f;
+  --surface: #25262a;
+  --sidebar: #202124;
+  --border: #3c4043;
+  --text: #e8eaed;
+  --secondary: #9aa0a6;
+  --muted: #80868b;
+  --accent: #8ab4f8;
+  --accent-hover: #aecbfa;
+  --selected: #2c3d54;
+  --danger: #f28b82;
+  --success: #81c995;
+  --mark: #5c4f12;
+  --tag-bg: #3c4043;
+  --tag-text: #dadce0;
+  --hover: #2a2b2f;
+  --overlay: rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
 }
 
 * {
@@ -129,9 +154,22 @@ select {
   justify-content: center;
 }
 
+.theme-icon-sun,
+html[data-theme="light"] .theme-icon-sun {
+  display: none;
+}
+
+html[data-theme="dark"] .theme-icon-moon {
+  display: none;
+}
+
+html[data-theme="dark"] .theme-icon-sun {
+  display: block;
+}
+
 .btn.active {
   background: var(--selected);
-  border-color: #c5d6ee;
+  border-color: var(--accent);
 }
 
 .btn:disabled {
@@ -272,6 +310,40 @@ select {
   gap: 2px;
 }
 
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.section-heading .btn {
+  width: 24px;
+  height: 24px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filter-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 4px 22px;
+}
+
+.filter-row.child {
+  font-size: 12px;
+}
+
+.filter-row.is-disabled {
+  opacity: 0.45;
+}
+
 .filter-row {
   display: flex;
   align-items: center;
@@ -329,7 +401,7 @@ select {
 }
 
 .doc-row:hover {
-  background: #fafafa;
+  background: var(--hover);
 }
 
 .doc-row.selected {
@@ -443,7 +515,7 @@ select {
 }
 
 .table tr:hover td {
-  background: #fafafa;
+  background: var(--hover);
 }
 
 .details-header,
@@ -491,7 +563,7 @@ select {
 
 .empty-state {
   position: absolute;
-  inset: var(--titlebar) 0 0;
+  inset: var(--titlebar) 0 var(--footer);
   background: var(--bg);
   z-index: 2;
 }
@@ -522,7 +594,7 @@ select {
 
 .settings {
   position: absolute;
-  inset: var(--titlebar) 0 0;
+  inset: var(--titlebar) 0 var(--footer);
   background: var(--bg);
   z-index: 4;
   overflow: auto;
@@ -540,13 +612,76 @@ select {
   color: var(--secondary);
 }
 
-.settings-panel input[type="text"] {
+.settings-panel input[type="text"],
+.settings-panel select,
+.details select {
   flex: 1;
   height: 36px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0 10px;
   background: var(--surface);
+}
+
+.taxonomy-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+
+.taxonomy-add .btn {
+  align-self: flex-start;
+}
+
+.taxonomy-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.tax-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--surface);
+}
+
+.tax-head,
+.tax-add-sub,
+.tax-sub {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.tax-head input,
+.tax-add-sub input {
+  min-width: 140px;
+}
+
+.tax-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.tax-sub {
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.tax-sub .name {
+  flex: 1;
+}
+
+.tax-sub .muted {
+  font-size: 12px;
 }
 
 .muted {
@@ -562,6 +697,29 @@ select {
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
+}
+
+.app-footer {
+  flex: 0 0 var(--footer);
+  height: var(--footer);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+  color: var(--muted);
+  font-size: 11px;
+  z-index: 8;
+}
+
+.app-footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  text-decoration: underline;
 }
 
 .folder-control {
@@ -613,8 +771,8 @@ select {
 
 .dialog {
   position: absolute;
-  inset: 0;
-  background: rgba(32, 33, 36, 0.32);
+  inset: 0 0 var(--footer);
+  background: var(--overlay);
   z-index: 6;
   display: flex;
   align-items: center;
@@ -659,7 +817,7 @@ select {
 }
 
 .folder-item:hover {
-  background: #fafafa;
+  background: var(--hover);
 }
 
 .folder-item.selected {

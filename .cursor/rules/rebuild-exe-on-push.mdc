@@ -1,0 +1,34 @@
+---
+description: Rebuild PDF-Catalog.exe whenever this project is committed or pushed
+alwaysApply: true
+---
+
+# Rebuild the Windows exe on commit and push
+
+When the user asks to **commit**, **push**, or **commit and push** this project, rebuild the packaged app so `dist\PDF-Catalog.exe` matches the code being published.
+
+## When
+
+- Do this only for this repo (`pdf-catalog` / PDF-Catalog).
+- Do this as part of the same commit/push request, not on every chat message.
+- If they commit and push in one request: commit the source, rebuild the exe, then push.
+- If they only commit or only push: still rebuild the exe before finishing.
+
+## How
+
+From the repo root, with the project venv:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_exe.py
+```
+
+Install PyInstaller into the venv first if the build says it is missing (`pip install pyinstaller`). Wait for the script to finish; it can take several minutes.
+
+## Do not
+
+- Do not commit `dist\`, `build\`, or the exe (they are gitignored).
+- Do not skip the rebuild because the change “looks small.”
+- Do not treat a failed build as success: report the error and do not claim the exe was updated.
+- Do not force-push or skip git hooks to make the rebuild succeed.
+
+Confirm in the reply that `dist\PDF-Catalog.exe` was rebuilt (or that the build failed).

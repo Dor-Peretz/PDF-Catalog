@@ -9,7 +9,11 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/settings.json
+data/categories.json
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+build/
+dist/
+icon.ico

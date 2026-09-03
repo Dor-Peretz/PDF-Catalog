@@ -34,14 +34,32 @@ It is meant to feel like a serious Windows document tool: fast, calm, practical.
 - In-app folder browser
 - Unchanged files are skipped by SHA-256
 
+## Windows app (send this)
+
+The packaged app is a single file:
+
+`dist\PDF-Catalog.exe`
+
+Send that file. Recipients double-click it — no Python install. The browser opens at `http://127.0.0.1:8765`. Tesseract OCR (Hebrew + English) is bundled. The catalog is stored in `%LOCALAPPDATA%\PDF-Catalog\`.
+
+Windows may show a SmartScreen warning because the exe is unsigned. Choose **More info → Run anyway**.
+
+To rebuild:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install pyinstaller
+python scripts\build_exe.py
+```
+
 ## Requirements
 
-- Python 3.10+
-- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) (the app ships Hebrew and English `tessdata` under `data/tessdata/`)
+- For the `.exe`: Windows 10/11, 64-bit. Nothing else.
+- For running from source: Python 3.10+ and [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) (Hebrew/English `tessdata` is already in `data/tessdata/`)
 
-Poppler is optional. Page rendering uses PyMuPDF, so scanned PDFs work without Poppler.
+Poppler is optional. Page rendering uses PyMuPDF.
 
-### Windows: Tesseract
+### Windows: Tesseract (source runs only)
 
 1. Install from [UB Mannheim Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
 2. Default path: `C:\Program Files\Tesseract-OCR\tesseract.exe`.

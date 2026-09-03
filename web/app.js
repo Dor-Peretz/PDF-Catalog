@@ -23,6 +23,7 @@ const state = {
   matches: 0,
   documents: [],
   folder: "",
+  taxonomy: [],
 };
 
 const els = {
@@ -50,6 +51,9 @@ const els = {
   folderPicker: document.getElementById("folder-picker"),
   pickerPath: document.getElementById("picker-path"),
   folderList: document.getElementById("folder-list"),
+  taxonomyEditor: document.getElementById("taxonomy-editor"),
+  newCategoryName: document.getElementById("new-category-name"),
+  newCategoryKeywords: document.getElementById("new-category-keywords"),
 };
 
 function icon(name) {
@@ -109,12 +113,33 @@ function categoryLabel(value) {
   return CATEGORY_LABELS[value] || value || "Other";
 }
 
+function classificationLabel(doc) {
+  const category = categoryLabel(doc.category);
+  const subcategory = String(doc.subcategory || "").trim();
+  return subcategory ? `${category} · ${subcategory}` : category;
+}
+
 function languageLabel(value) {
   return LANGUAGE_LABELS[value] || value || "Unknown";
 }
 
-function selectedCategories() {
-  return [...document.querySelectorAll('#category-filters input[type="checkbox"]:checked')].map((el) => el.value);
+function selectedFilterState() {
+  const categories = [...document.querySelectorAll('#category-filters input[data-kind="parent"]:checked')].map(
+    (el) => el.value
+  );
+  const subcategories = [...document.querySelectorAll('#category-filters input[data-kind="sub"]:checked')]
+    .filter((el) => !categories.includes(el.dataset.parent))
+    .map((el) => ({ parent: el.dataset.parent, name: el.value }));
+  return { categories, subcategories };
+}
+
+function selectedFilterKeys() {
+  const keys = new Set();
+  document.querySelectorAll("#category-filters input:checked").forEach((el) => {
+    if (el.dataset.kind === "parent") keys.add(`p:${el.value}`);
+    if (el.dataset.kind === "sub") keys.add(`s:${el.dataset.parent}>>${el.value}`);
+  });
+  return keys;
 }
 
 function selectedOcr() {
@@ -141,6 +166,28 @@ function setFolder(path) {
   if (els.emptyFolder) els.emptyFolder.value = state.folder;
 }
 
+const THEME_KEY = "pdf-catalog-theme";
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem(THEME_KEY, next);
+  const button = document.getElementById("theme-btn");
+  if (button) {
+    button.title = next === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  }
+}
+
+function toggleTheme() {
+  applyTheme(currentTheme() === "dark" ? "light" : "dark");
+}
+
+applyTheme(localStorage.getItem(THEME_KEY) || "light");
+
 async function loadStatus() {
   const data = await api("/api/status");
   state.total = data.documents;
@@ -158,17 +205,52 @@ async function loadStatus() {
 
 async function loadFilters() {
   const data = await api("/api/filters");
-  const selected = new Set(selectedCategories());
-  els.categories.innerHTML = (data.categories || [])
-    .map(
-      (item) => `
-      <label class="filter-row">
-        <input type="checkbox" value="${escapeHtml(item.category)}" ${selected.has(item.category) ? "checked" : ""} />
-        ${escapeHtml(categoryLabel(item.category))}
-        <span>${item.count}</span>
-      </label>`
-    )
-    .join("") || `<p class="muted">No documents yet</p>`;
+  state.taxonomy = data.taxonomy || [];
+  const selected = selectedFilterKeys();
+  const counts = data.categories || [];
+  const parentCounts = new Map();
+  const pairCounts = new Map();
+  const extraNames = new Set();
+  const taxonomyNames = new Set(state.taxonomy.map((item) => item.name));
+  for (const row of counts) {
+    parentCounts.set(row.category, (parentCounts.get(row.category) || 0) + row.count);
+    pairCounts.set(`${row.category}\t${row.subcategory || ""}`, row.count);
+    if (!taxonomyNames.has(row.category)) extraNames.add(row.category);
+  }
+  const groups = [
+    ...state.taxonomy,
+    ...[...extraNames].map((name) => ({ id: `orphan-${name}`, name, subcategories: [] })),
+  ];
+  els.categories.innerHTML =
+    groups
+      .map((group) => {
+        const parentChecked = selected.has(`p:${group.name}`) ? "checked" : "";
+        const children = group.subcategories || [];
+        const childHtml = children
+          .map((sub) => {
+            const key = `s:${group.name}>>${sub.name}`;
+            const disabled = parentChecked ? "disabled" : "";
+            const checked = !parentChecked && selected.has(key) ? "checked" : "";
+            return `
+              <label class="filter-row child ${parentChecked ? "is-disabled" : ""}">
+                <input type="checkbox" data-kind="sub" data-parent="${escapeHtml(group.name)}" value="${escapeHtml(sub.name)}" ${checked} ${disabled} />
+                ${escapeHtml(sub.name)}
+                <span>${pairCounts.get(`${group.name}\t${sub.name}`) || 0}</span>
+              </label>`;
+          })
+          .join("");
+        return `
+          <div class="filter-group">
+            <label class="filter-row">
+              <input type="checkbox" data-kind="parent" value="${escapeHtml(group.name)}" ${parentChecked} />
+              ${escapeHtml(categoryLabel(group.name))}
+              <span>${parentCounts.get(group.name) || 0}</span>
+            </label>
+            ${childHtml ? `<div class="filter-children">${childHtml}</div>` : ""}
+          </div>`;
+      })
+      .join("") || `<p class="muted">No documents yet</p>`;
+  renderTaxonomyEditor();
 
   const langCounts = Object.fromEntries((data.languages || []).map((item) => [item.language, item.count]));
   document.querySelectorAll("[data-lang-count]").forEach((el) => {
@@ -185,8 +267,11 @@ async function search() {
   const params = new URLSearchParams();
   const query = els.query.value.trim();
   if (query) params.set("q", query);
-  const cats = selectedCategories();
-  if (cats.length) params.set("categories", cats.join(","));
+  const { categories, subcategories } = selectedFilterState();
+  if (categories.length) params.set("categories", categories.join(","));
+  if (subcategories.length) {
+    params.set("subcategories", subcategories.map((item) => `${item.parent}>>${item.name}`).join(","));
+  }
   const language = selectedLanguage();
   if (language) params.set("language", language);
   const ocr = selectedOcr();
@@ -196,7 +281,7 @@ async function search() {
   state.documents = data.results;
   state.matches = data.matches;
   state.total = data.total;
-  const suffix = query || cats.length || language || ocr.length ? ` · ${data.matches} matches` : "";
+  const suffix = query || categories.length || subcategories.length || language || ocr.length ? ` · ${data.matches} matches` : "";
   els.searchMeta.textContent = `${data.total.toLocaleString()} documents${suffix}`;
   els.sortLabel.textContent = `Sort: ${els.sort.selectedOptions[0].text}`;
   renderResults();
@@ -234,7 +319,7 @@ function renderResults() {
               (doc) => `
             <tr data-id="${doc.id}" class="${doc.id === state.selectedId ? "selected" : ""}">
               <td>${escapeHtml(doc.filename)}</td>
-              <td>${escapeHtml(categoryLabel(doc.category))}</td>
+              <td>${escapeHtml(classificationLabel(doc))}</td>
               <td>${escapeHtml(languageLabel(doc.language))}</td>
               <td>${doc.page_count || 0}</td>
               <td>${escapeHtml(formatDate(doc.mtime))}</td>
@@ -258,7 +343,7 @@ function renderResults() {
           <div class="doc-icon">${icon("i-file-text")}</div>
           <div>
             <div class="doc-name">${escapeHtml(doc.filename)}</div>
-            <div class="doc-meta">${escapeHtml(categoryLabel(doc.category))} · ${escapeHtml(languageLabel(doc.language))} · ${doc.page_count || 0} pages</div>
+            <div class="doc-meta">${escapeHtml(classificationLabel(doc))} · ${escapeHtml(languageLabel(doc.language))} · ${doc.page_count || 0} pages</div>
             <div class="doc-keywords">${keywords}</div>
             ${highlightSnippet(doc.snippet)}
             <div class="doc-path">${escapeHtml(doc.folder || parentPath(doc.path))}</div>
@@ -271,6 +356,88 @@ function renderResults() {
 
 function toggleEmpty(show) {
   els.empty.classList.toggle("hidden", !show);
+}
+
+function categoryOptions(selected) {
+  const names = state.taxonomy.map((item) => item.name);
+  const extra =
+    selected && !names.includes(selected)
+      ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(categoryLabel(selected))}</option>`
+      : "";
+  return (
+    extra +
+    state.taxonomy
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.name)}" ${item.name === selected ? "selected" : ""}>${escapeHtml(categoryLabel(item.name))}</option>`
+      )
+      .join("")
+  );
+}
+
+function subcategoryOptions(categoryName, selected) {
+  const category = state.taxonomy.find((item) => item.name === categoryName);
+  const subs = category?.subcategories || [];
+  const extra =
+    selected && !subs.some((sub) => sub.name === selected)
+      ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`
+      : "";
+  return (
+    `<option value="">None</option>` +
+    extra +
+    subs
+      .map(
+        (sub) =>
+          `<option value="${escapeHtml(sub.name)}" ${sub.name === selected ? "selected" : ""}>${escapeHtml(sub.name)}</option>`
+      )
+      .join("")
+  );
+}
+
+function renderTaxonomyEditor() {
+  if (!els.taxonomyEditor) return;
+  if (!state.taxonomy.length) {
+    els.taxonomyEditor.innerHTML = `<p class="muted">No categories yet</p>`;
+    return;
+  }
+  els.taxonomyEditor.innerHTML = state.taxonomy
+    .map(
+      (cat) => `
+      <div class="tax-card" data-id="${escapeHtml(cat.id)}">
+        <div class="tax-head">
+          <input type="text" class="tax-name" value="${escapeHtml(cat.name)}" spellcheck="false" />
+          <input type="text" class="tax-keywords" value="${escapeHtml(cat.keywords || "")}" placeholder="Keywords" spellcheck="false" />
+          <button type="button" class="btn" data-save-cat="${escapeHtml(cat.id)}">Save</button>
+          <button type="button" class="btn" data-del-cat="${escapeHtml(cat.id)}">Delete</button>
+        </div>
+        <div class="tax-subs">
+          ${(cat.subcategories || [])
+            .map(
+              (sub) => `
+            <div class="tax-sub">
+              <span class="name">${escapeHtml(sub.name)}</span>
+              ${sub.keywords ? `<span class="muted">${escapeHtml(sub.keywords)}</span>` : ""}
+              <button type="button" class="btn" data-del-sub="${escapeHtml(sub.id)}" data-parent="${escapeHtml(cat.id)}">Remove</button>
+            </div>`
+            )
+            .join("")}
+          <div class="tax-add-sub">
+            <input type="text" data-new-sub-name="${escapeHtml(cat.id)}" placeholder="Subcategory name" spellcheck="false" />
+            <input type="text" data-new-sub-kw="${escapeHtml(cat.id)}" placeholder="Keywords" spellcheck="false" />
+            <button type="button" class="btn" data-add-sub="${escapeHtml(cat.id)}">Add subcategory</button>
+          </div>
+        </div>
+      </div>`
+    )
+    .join("");
+}
+
+async function reloadClassificationUi() {
+  await loadFilters();
+  await search();
+  if (state.selectedId && !els.details.classList.contains("hidden")) {
+    await openDetails(state.selectedId);
+  }
 }
 
 function showDetails(open) {
@@ -289,7 +456,12 @@ async function openDetails(id) {
     <dl class="prop"><dt>Location</dt><dd class="doc-path">${escapeHtml(doc.folder || parentPath(doc.path))}</dd></dl>
     <dl class="prop"><dt>Pages</dt><dd>${doc.page_count || 0}</dd></dl>
     <dl class="prop"><dt>Language</dt><dd>${escapeHtml(languageLabel(doc.language))}</dd></dl>
-    <dl class="prop"><dt>Category</dt><dd>${escapeHtml(categoryLabel(doc.category))}</dd></dl>
+    <dl class="prop"><dt>Category</dt><dd>
+      <select id="doc-category">${categoryOptions(doc.category)}</select>
+    </dd></dl>
+    <dl class="prop"><dt>Subcategory</dt><dd>
+      <select id="doc-subcategory">${subcategoryOptions(doc.category, doc.subcategory || "")}</select>
+    </dd></dl>
     <dl class="prop"><dt>Keywords</dt><dd>${keywords}</dd></dl>
     <dl class="prop"><dt>Text extraction</dt><dd class="status-line ${status.cls}">${icon(status.icon)} ${status.text}</dd></dl>
     <dl class="prop"><dt>Indexed</dt><dd>${escapeHtml(formatDate(doc.indexed_at))}</dd></dl>
@@ -422,7 +594,19 @@ document.getElementById("empty-select-btn").addEventListener("click", async () =
 document.getElementById("browse-btn").addEventListener("click", () => chooseFolder().catch(alert));
 document.getElementById("empty-browse-btn").addEventListener("click", () => chooseFolder().catch(alert));
 document.getElementById("refresh-btn").addEventListener("click", () => startScan({ force: false }).catch(alert));
-document.getElementById("settings-btn").addEventListener("click", () => els.settings.classList.remove("hidden"));
+document.getElementById("settings-btn").addEventListener("click", () => {
+  els.settings.classList.remove("hidden");
+  renderTaxonomyEditor();
+});
+document.getElementById("manage-categories-btn").addEventListener("click", () => {
+  els.settings.classList.remove("hidden");
+  renderTaxonomyEditor();
+  els.taxonomyEditor.scrollIntoView({ block: "start" });
+});
+document.getElementById("theme-btn").addEventListener("click", toggleTheme);
+document.getElementById("quit-btn").addEventListener("click", () => {
+  api("/api/quit", { method: "POST" }).catch(() => {});
+});
 document.getElementById("close-settings").addEventListener("click", () => els.settings.classList.add("hidden"));
 document.getElementById("close-details").addEventListener("click", () => showDetails(false));
 document.getElementById("view-list").addEventListener("click", () => setView("list"));
@@ -514,13 +698,50 @@ document.getElementById("cancel-btn").addEventListener("click", async () => {
 
 els.query.addEventListener("input", debounce(() => search().catch(console.error), 200));
 els.sort.addEventListener("change", () => search().catch(console.error));
-els.categories.addEventListener("change", () => search().catch(console.error));
+els.categories.addEventListener("change", (event) => {
+  const input = event.target.closest("input");
+  if (input?.dataset.kind === "parent") {
+    const group = input.closest(".filter-group");
+    group?.querySelectorAll('input[data-kind="sub"]').forEach((el) => {
+      el.disabled = input.checked;
+      if (input.checked) el.checked = false;
+      el.closest(".filter-row")?.classList.toggle("is-disabled", input.checked);
+    });
+  }
+  search().catch(console.error);
+});
 document.getElementById("language-filters").addEventListener("change", () => search().catch(console.error));
 document.getElementById("ocr-filters").addEventListener("change", () => search().catch(console.error));
 
 els.results.addEventListener("click", (event) => {
   const row = event.target.closest("[data-id]");
   if (row) openDetails(row.dataset.id).catch(alert);
+});
+
+els.detailsBody.addEventListener("change", async (event) => {
+  const categorySelect = event.target.closest("#doc-category");
+  const subcategorySelect = event.target.closest("#doc-subcategory");
+  if (!categorySelect && !subcategorySelect) return;
+  const categoryEl = document.getElementById("doc-category");
+  const subcategoryEl = document.getElementById("doc-subcategory");
+  if (!categoryEl || !state.selectedId) return;
+  if (categorySelect) {
+    subcategoryEl.innerHTML = subcategoryOptions(categoryEl.value, "");
+  }
+  try {
+    await api(`/api/documents/${state.selectedId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: categoryEl.value,
+        subcategory: subcategoryEl.value,
+      }),
+    });
+    await loadFilters();
+    await search();
+  } catch (err) {
+    alert(err.message);
+  }
 });
 
 els.detailsBody.addEventListener("click", async (event) => {
@@ -538,6 +759,87 @@ els.detailsBody.addEventListener("click", async (event) => {
     }
   } catch (err) {
     alert(err.message);
+  }
+});
+
+document.getElementById("add-category-btn").addEventListener("click", async () => {
+  const name = els.newCategoryName.value.trim();
+  if (!name) return;
+  try {
+    await api("/api/taxonomy/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        keywords: els.newCategoryKeywords.value.trim(),
+      }),
+    });
+    els.newCategoryName.value = "";
+    els.newCategoryKeywords.value = "";
+    await reloadClassificationUi();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+els.newCategoryName.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    document.getElementById("add-category-btn").click();
+  }
+});
+els.taxonomyEditor.addEventListener("click", async (event) => {
+  const save = event.target.closest("[data-save-cat]");
+  const delCat = event.target.closest("[data-del-cat]");
+  const addSub = event.target.closest("[data-add-sub]");
+  const delSub = event.target.closest("[data-del-sub]");
+  try {
+    if (save) {
+      const card = save.closest(".tax-card");
+      await api(`/api/taxonomy/categories/${save.dataset.saveCat}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: card.querySelector(".tax-name").value.trim(),
+          keywords: card.querySelector(".tax-keywords").value.trim(),
+        }),
+      });
+      await reloadClassificationUi();
+    }
+    if (delCat) {
+      if (!confirm("Delete this category? Documents in it will move to Other.")) return;
+      await api(`/api/taxonomy/categories/${delCat.dataset.delCat}`, { method: "DELETE" });
+      await reloadClassificationUi();
+    }
+    if (addSub) {
+      const nameInput = els.taxonomyEditor.querySelector(`[data-new-sub-name="${addSub.dataset.addSub}"]`);
+      const kwInput = els.taxonomyEditor.querySelector(`[data-new-sub-kw="${addSub.dataset.addSub}"]`);
+      const name = nameInput?.value.trim();
+      if (!name) return;
+      await api(`/api/taxonomy/categories/${addSub.dataset.addSub}/subcategories`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, keywords: kwInput?.value.trim() || "" }),
+      });
+      await reloadClassificationUi();
+    }
+    if (delSub) {
+      await api(
+        `/api/taxonomy/categories/${delSub.dataset.parent}/subcategories/${delSub.dataset.delSub}`,
+        { method: "DELETE" }
+      );
+      await reloadClassificationUi();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+els.taxonomyEditor.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  const addName = event.target.closest("[data-new-sub-name]");
+  if (addName) {
+    event.preventDefault();
+    const button = els.taxonomyEditor.querySelector(`[data-add-sub="${addName.dataset.newSubName}"]`);
+    button?.click();
   }
 });
 

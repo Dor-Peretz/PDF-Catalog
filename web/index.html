@@ -6,6 +6,9 @@
     <title>PDF Catalog</title>
     <link rel="icon" type="image/png" href="/static/logo.png" />
     <link rel="stylesheet" href="/static/styles.css" />
+    <script>
+      document.documentElement.dataset.theme = localStorage.getItem("pdf-catalog-theme") || "light";
+    </script>
   </head>
   <body>
     <svg xmlns="http://www.w3.org/2000/svg" class="icon-sprite" aria-hidden="true">
@@ -46,8 +49,13 @@
         <path d="m10.3 3.9-7.1 12.3A2 2 0 0 0 5 19.3h14a2 2 0 0 0 1.8-3.1L13.7 3.9a2 2 0 0 0-3.4 0z" />
         <path d="M12 9v4" /><path d="M12 17h.01" />
       </symbol>
-      <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.9 4.9 1.4 1.4" /><path d="m17.7 17.7 1.4 1.4" />
+        <path d="M2 12h2" /><path d="M20 12h2" /><path d="m4.9 19.1 1.4-1.4" /><path d="m17.7 6.3 1.4-1.4" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14" /><path d="M5 12h14" />
       </symbol>
     </svg>
 
@@ -69,6 +77,11 @@
         <button type="button" class="btn" id="refresh-btn" title="Rescan folder">
           <svg class="icon"><use href="#i-refresh"></use></svg>
           Rescan
+        </button>
+        <button type="button" class="btn" id="quit-btn" title="Quit">Quit</button>
+        <button type="button" class="btn icon-only" id="theme-btn" title="Switch to dark mode">
+          <svg class="icon theme-icon-moon"><use href="#i-moon"></use></svg>
+          <svg class="icon theme-icon-sun"><use href="#i-sun"></use></svg>
         </button>
         <button type="button" class="btn icon-only" id="settings-btn" title="Settings">
           <svg class="icon"><use href="#i-settings"></use></svg>
@@ -102,7 +115,12 @@
       <aside class="sidebar">
         <p class="section-label">Filters</p>
 
-        <p class="section-label">Categories</p>
+        <div class="section-heading">
+          <p class="section-label">Categories</p>
+          <button type="button" class="btn icon-only" id="manage-categories-btn" title="Manage categories">
+            <svg class="icon"><use href="#i-plus"></use></svg>
+          </button>
+        </div>
         <div id="category-filters" class="filter-list"></div>
 
         <p class="section-label">Language</p>
@@ -194,6 +212,15 @@
         <label class="filter-row"><input type="checkbox" id="opt-heb" /> Hebrew</label>
         <label class="filter-row"><input type="checkbox" id="opt-eng" /> English</label>
 
+        <p class="section-label">Categories</p>
+        <p class="muted">Create categories and nested subcategories. New scans use keywords to classify documents automatically. You can also assign a document from the details panel.</p>
+        <div class="taxonomy-add">
+          <input id="new-category-name" type="text" placeholder="Category name" spellcheck="false" />
+          <input id="new-category-keywords" type="text" placeholder="Keywords, comma separated" spellcheck="false" />
+          <button type="button" class="btn" id="add-category-btn">Add category</button>
+        </div>
+        <div id="taxonomy-editor" class="taxonomy-editor"></div>
+
         <p class="section-label">Database</p>
         <p id="db-stats" class="muted"></p>
         <div class="settings-row">
@@ -203,7 +230,11 @@
       </div>
     </div>
 
-    </div>
+    <footer class="app-footer">
+      This app was developed for Veronica
+      <span class="footer-sep" aria-hidden="true">·</span>
+      <a href="https://github.com/Dor-Peretz/PDF-Catalog" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </footer>
 
     <div id="folder-picker" class="dialog hidden">
       <div class="dialog-panel" role="dialog" aria-labelledby="folder-picker-title">

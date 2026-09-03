@@ -4,25 +4,15 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-STOPWORDS_PATH = ROOT / "data" / "hebrew_stopwords.txt"
+from app.paths import stopwords_path
+
+STOPWORDS_PATH = stopwords_path()
 
 NIKUD_RE = re.compile(r"[\u0591-\u05C7]")
 TOKEN_RE = re.compile(r"[\u0590-\u05FF]{2,}|[A-Za-z]{2,}")
 DATE_DMY_RE = re.compile(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b")
 DATE_ISO_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
-
-CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
-    ("חשבונית", ("חשבונית", "חשבוניות", "invoice", "invoices", "מע״מ", 'מע"מ', "מעמ", "vat")),
-    ("קבלה", ("קבלה", "קבלות", "receipt", "receipts")),
-    ("חוזה", ("חוזה", "חוזים", "הסכם", "הסכמים", "contract", "agreement")),
-    ("תעודה", ("תעודה", "תעודת", "תעודות", "certificate", "certification", "diploma")),
-    ("מכתב", ("מכתב", "מכתבים", "letter", "correspondence")),
-    ("דוח", ("דוח", "דו״ח", 'דו"ח', "דוחות", "report", "reports")),
-]
-
 MAX_KEYWORDS = 20
 
 
@@ -104,26 +94,50 @@ def extract_dates(text: str) -> list[str]:
     return found
 
 
-def suggest_category(text: str, keywords: list[str]) -> str:
+from app.taxonomy import load_taxonomy
+
+
+def _trigger_list(keywords: str, name: str) -> list[str]:
+    parts = [part.strip() for part in keywords.replace(";", ",").split(",")]
+    parts.append(name)
+    return [part for part in parts if part]
+
+
+def _score_triggers(text: str, keywords: list[str], triggers: list[str]) -> int:
     tokens = set(tokenize(text)) | {normalize_token(word) for word in keywords}
     haystack = strip_nikud(text).casefold()
-    best = "אחר"
-    best_hits = 0
-    for category, triggers in CATEGORIES:
-        hits = 0
-        for trigger in triggers:
-            normalized = normalize_token(trigger)
-            if not normalized:
-                continue
-            if normalized.isascii():
-                if normalized in tokens:
-                    hits += 1
-            elif normalized in tokens or normalized in haystack:
+    hits = 0
+    for trigger in triggers:
+        normalized = normalize_token(trigger)
+        if not normalized:
+            continue
+        if normalized.isascii():
+            if normalized in tokens:
                 hits += 1
-        if hits > best_hits:
-            best = category
-            best_hits = hits
-    return best
+        elif normalized in tokens or normalized in haystack:
+            hits += 1
+    return hits
+
+
+def suggest_category(text: str, keywords: list[str]) -> tuple[str, str]:
+    best = "אחר"
+    best_sub = ""
+    best_hits = 0
+    for category in load_taxonomy():
+        parent_hits = _score_triggers(text, keywords, _trigger_list(category.get("keywords") or "", category["name"]))
+        sub_name = ""
+        sub_hits = 0
+        for sub in category.get("subcategories") or []:
+            score = _score_triggers(text, keywords, _trigger_list(sub.get("keywords") or "", sub["name"]))
+            if score > sub_hits:
+                sub_hits = score
+                sub_name = sub["name"]
+        total = parent_hits + sub_hits
+        if total > best_hits:
+            best_hits = total
+            best = category["name"]
+            best_sub = sub_name if sub_hits else ""
+    return best, best_sub
 
 
 def extract_keywords(
@@ -156,9 +170,11 @@ def analyze_text(
 ) -> dict:
     keywords = extract_keywords(text, doc_frequencies, corpus_size)
     keyword_words = [word for word, _ in keywords]
+    category, subcategory = suggest_category(text, keyword_words)
     return {
         "keywords": keywords,
-        "category": suggest_category(text, keyword_words),
+        "category": category,
+        "subcategory": subcategory,
         "dates": extract_dates(text),
         "language": detect_language(text),
     }

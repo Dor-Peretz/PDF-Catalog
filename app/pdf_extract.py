@@ -13,8 +13,9 @@ MIN_CHARS_PER_PAGE = 30
 OCR_DPI = 200
 OCR_LANG = "heb+eng"
 
-ROOT = Path(__file__).resolve().parent.parent
-LOCAL_TESSDATA = ROOT / "data" / "tessdata"
+from app.paths import bundled_tesseract, tessdata_dir
+
+LOCAL_TESSDATA = tessdata_dir()
 
 
 def _windows_program_files() -> list[Path]:
@@ -32,6 +33,9 @@ def find_tesseract() -> str | None:
     env = os.environ.get("TESSERACT_CMD") or os.environ.get("TESSERACT_PATH")
     if env and Path(env).exists():
         return env
+    bundled = bundled_tesseract()
+    if bundled:
+        return str(bundled)
     which = shutil.which("tesseract")
     if which:
         return which
@@ -93,6 +97,7 @@ def configure_ocr() -> tuple[str | None, str | None]:
         import pytesseract
 
         pytesseract.pytesseract.tesseract_cmd = tesseract
+        os.environ["PATH"] = str(Path(tesseract).parent) + os.pathsep + os.environ.get("PATH", "")
     return tesseract, poppler
 
 

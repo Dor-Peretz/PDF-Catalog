@@ -187,6 +187,7 @@ def index_file(
         analysis = {
             "keywords": [],
             "category": "אחר",
+            "subcategory": "",
             "dates": [],
             "language": "unknown",
         }
@@ -203,6 +204,7 @@ def index_file(
         is_scanned=bool(extracted["is_scanned"]),
         language=analysis["language"],
         category=analysis["category"],
+        subcategory=analysis.get("subcategory") or "",
         dates_json=json.dumps(analysis["dates"], ensure_ascii=False),
         full_text=extracted["text"],
         keywords=analysis["keywords"],
